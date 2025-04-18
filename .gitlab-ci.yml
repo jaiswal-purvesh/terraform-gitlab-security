@@ -1,0 +1,78 @@
+stages:
+  - validate
+  - security
+  - plan
+  - apply
+
+variables:
+  TF_VERSION: "1.6.0"
+  AWS_REGION: "ap-south-1"
+
+before_script:
+  - apt-get update && apt-get install -y unzip curl jq git
+  - curl -fsSL https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip -o terraform.zip
+  - unzip terraform.zip && mv terraform /usr/local/bin/
+  - terraform --version
+
+validate:
+  stage: validate
+  script:
+    - terraform init
+    - terraform validate
+
+checkov_scan:
+  stage: security
+  image: bridgecrew/checkov
+  script:
+    - checkov -d . --framework terraform --output json > security-reports/checkov.json
+  artifacts:
+    paths: [security-reports/checkov.json]
+
+tfsec_scan:
+  stage: security
+  image: aquasec/tfsec:latest
+  script:
+    - tfsec . --format json --out security-reports/tfsec.json
+  artifacts:
+    paths: [security-reports/tfsec.json]
+
+terrascan_scan:
+  stage: security
+  image: accurics/terrascan
+  script:
+    - terrascan scan -t aws -i terraform -d . -o json > security-reports/terrascan.json
+  artifacts:
+    paths: [security-reports/terrascan.json]
+
+trivy_scan:
+  stage: security
+  image: aquasec/trivy:latest
+  script:
+    - trivy config . --format json --output security-reports/trivy.json
+  artifacts:
+    paths: [security-reports/trivy.json]
+
+gitleaks_scan:
+  stage: security
+  image: zricethezav/gitleaks
+  script:
+    - gitleaks detect --source . --report-format json --report-path security-reports/gitleaks.json
+  artifacts:
+    paths: [security-reports/gitleaks.json]
+
+generate_security_report:
+  stage: security
+  image: python:3.10
+  script:
+    - pip install -q json2html
+    - python3 generate_report.py
+  artifacts:
+    paths:
+      - security-reports/summary-report.html
+    expire_in: 1 week
+  needs:
+    - checkov_scan
+    - tfsec_scan
+    - terrascan_scan
+    - trivy_scan
+    - gitleaks_scan
